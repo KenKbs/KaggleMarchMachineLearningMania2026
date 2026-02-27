@@ -1,5 +1,6 @@
 ﻿import re
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -8,18 +9,36 @@ RAW_DIR = Path('data/raw')
 CLEAN_DIR = Path('data/cleaned')
 
 
-def parse_seed_value(seed: str):
+def parse_seed_value(seed: str) -> int | float:
+    """Convert seed strings like "W01" into an integer [1,16]
+
+    Args:
+        seed (str): Raw seed string
+
+    Returns:
+        int, float: either int if seed exists, else it's a np.nan (float)
+    """
     m = re.search(r"(\d+)", str(seed))
     return int(m.group(1)) if m else np.nan
 
 
 def assert_seed_parser_examples() -> None:
-    assert parse_seed_value('W01') == 1
+    """Sanity check if parsing works
+    """
+    assert parse_seed_value('W01') == 1 
     assert parse_seed_value('X16a') == 16
     assert parse_seed_value('Z12b') == 12
 
 
 def build_team_game_rows(reg_compact: pd.DataFrame) -> pd.DataFrame:
+    """Turn each game row into two rows, one per team, --> aggregate team stats easily later
+
+    Args:
+        reg_compact (pd.DataFrame): usually regularSeasonCompactResults table
+
+    Returns:
+        pd.DataFrame: w_rows = winner perspective, l_rows = looser perspecctive --> every game = 2 team rows
+    """
     w_rows = reg_compact[[
         'Season',
         'DayNum',
@@ -62,6 +81,15 @@ def build_team_game_rows(reg_compact: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_team_season_features(reg_compact: pd.DataFrame) -> pd.DataFrame:
+    """Build a per-team, per-season summary table from regular season games
+    Baseline features / metadata per team
+
+    Args:
+        reg_compact (pd.DataFrame):   usually regularSeasonCompactResults table
+
+    Returns:
+        pd.DataFrame: One row per season, TeamID with important stats per team. 
+    """
     team_games = build_team_game_rows(reg_compact)
 
     season_agg = (
@@ -103,12 +131,28 @@ def build_team_season_features(reg_compact: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_seed_table(seed_df: pd.DataFrame) -> pd.DataFrame:
+    """Make a simple (Season, TeamID) --> SeedNum lookup Table
+
+    Args:
+        seed_df (pd.DataFrame): usually dataframe created by converting MNCAATTourney.csv seeds
+
+    Returns:
+        pd.DataFrame: Seed lookup table with columns (Season, TeamID, SeedNum)
+    """
     seeds = seed_df[['Season', 'TeamID', 'Seed']].copy()
     seeds['SeedNum'] = seeds['Seed'].map(parse_seed_value)
     return seeds[['Season', 'TeamID', 'SeedNum']]
 
 
 def make_canonical_tourney_matchups(tourney_compact: pd.DataFrame) -> pd.DataFrame:
+    """Convert hiistorical tournament results into a consistent training dataset format
+
+    Args:
+        tourney_compact (pd.DataFrame): usualyl dataframe generated from MNCAATourneyCompactResults.csv
+
+    Returns:
+        pd.DataFrame: Team1ID, Team2ID, target (= 1 if Team1 won, 0 if Team 2 won)
+    """
     out = tourney_compact[['Season', 'WTeamID', 'LTeamID']].copy()
     out['Team1ID'] = out[['WTeamID', 'LTeamID']].min(axis=1)
     out['Team2ID'] = out[['WTeamID', 'LTeamID']].max(axis=1)
@@ -117,9 +161,18 @@ def make_canonical_tourney_matchups(tourney_compact: pd.DataFrame) -> pd.DataFra
 
 
 def parse_submission_ids(sub_df: pd.DataFrame) -> pd.DataFrame:
+    """Turn submission IDs like 2025_1101_1325 into columns
+
+    Args:
+        sub_df (pd.DataFrame): SampleSubmissionStage1.csv as dataframe with an ID column
+
+    Returns:
+        pd.DataFrame: Dataframe with raw UD and IDs split into Season, Team1ID, and Team2ID columns 
+    """
     ids = sub_df['ID'].str.split('_', expand=True)
     out = pd.DataFrame(
         {
+            'ID': sub_df['ID'].value, # Keep raw ID value for submission later
             'Season': ids[0].astype(int),
             'Team1ID': ids[1].astype(int),
             'Team2ID': ids[2].astype(int),
@@ -134,6 +187,18 @@ def attach_pair_features(
     seeds: pd.DataFrame,
     include_target: bool,
 ) -> pd.DataFrame:
+    """Builds a feeature dataframe for training
+
+    Args:
+        pair_df (pd.DataFrame): rows like: Season, Team1ID, Teams2ID (+ target (who won) if training)
+        team_feats (pd.DataFrame): per team season stats
+        seeds (pd.DataFrame): (Season, Teamid)--> SeedNum
+        include_target (bool): if targets (who won) should be included for training
+
+    Returns:
+        pd.DataFrame: Creates a clean feature table SeedDiiff, seed_missing_any, WinPctDiff, PoinntMarginDiff,
+                      Team1_Last10_WinPct, Team1_Last10_PointMargin, Team2_Last10_WinPct, Team2_Last10_PointMargin etc. 
+    """
     t1 = team_feats.rename(
         columns={
             'TeamID': 'Team1ID',
@@ -194,6 +259,17 @@ def attach_pair_features(
 
 
 def validate_pair_table(df: pd.DataFrame, with_target: bool, table_name: str) -> None:
+    """Quick sanity check to catch errors
+
+    Args:
+        df (pd.DataFrame): _description_
+        with_target (bool): _description_
+        table_name (str): _description_
+
+    Raises:
+        ValueError: _description_
+        ValueError: _description_
+    """
     key_dupes = df.duplicated(subset=['Season', 'Team1ID', 'Team2ID']).sum()
     if key_dupes:
         raise ValueError(f'{table_name}: duplicate matchup keys found: {key_dupes}')
@@ -202,7 +278,24 @@ def validate_pair_table(df: pd.DataFrame, with_target: bool, table_name: str) ->
         raise ValueError(f'{table_name}: target contains values outside 0/1')
 
 
-def build_gender_pipeline(prefix: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+GenderPrefix = Literal["M", "W"] # Gender prefix for function definition
+def build_gender_pipeline(prefix: GenderPrefix) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Pipeline to run everything above for men or women
+    - loads the three raw CSV's for the three stages of data: RegularSeasonCompactResults, NCAATourneyCompactResults and NCAATourneySeeds.
+    - Builds team features + seed table
+    - Builds cacnonical tournament matchcups
+    - Builds training features + validates them with a quick sanity check
+    - team_feats is useful as a lookup table 
+    - train_feat is the model ready training dataset (X+y)
+
+    Args:
+        prefix (str): M for men W for women
+
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]: team features: team-level features for each season (one Row = TeamID, Season, TeamStats) (How good was Team X in Season Y?)
+                                           Train features: per matcchup table build from tournament games (historical) One Row = (Season, Team1ID, Team2ID) for a tournament game
+                                           train features --> SeedDiff, WinPctDiff, PointMarginDiff, Last10WinPctDiff etc. (also includes target (if team1 won else 0)
+    """
     reg = pd.read_csv(RAW_DIR / f'{prefix}RegularSeasonCompactResults.csv')
     tour = pd.read_csv(RAW_DIR / f'{prefix}NCAATourneyCompactResults.csv')
     seeds = pd.read_csv(RAW_DIR / f'{prefix}NCAATourneySeeds.csv')
@@ -224,6 +317,21 @@ def build_inference_features(
     women_team_feats: pd.DataFrame,
     women_seed_table: pd.DataFrame,
 ) -> pd.DataFrame:
+    """Build the feature table for the matchups the competition wants us to predict (from sample submission.csv)
+
+    Args:
+        sample_sub (pd.DataFrame): 
+        men_team_feats (pd.DataFrame): _description_
+        men_seed_table (pd.DataFrame): _description_
+        women_team_feats (pd.DataFrame): _description_
+        women_seed_table (pd.DataFrame): _description_
+
+    Raises:
+        ValueError: _description_
+
+    Returns:
+        pd.DataFrame: _description_
+    """
     base = parse_submission_ids(sample_sub)
 
     men_mask = base['Team1ID'] < 3000
