@@ -172,7 +172,7 @@ def parse_submission_ids(sub_df: pd.DataFrame) -> pd.DataFrame:
     ids = sub_df['ID'].str.split('_', expand=True)
     out = pd.DataFrame(
         {
-            'ID': sub_df['ID'].value, # Keep raw ID value for submission later
+            'ID': sub_df['ID'].values, # Keep raw ID values for submission later
             'Season': ids[0].astype(int),
             'Team1ID': ids[1].astype(int),
             'Team2ID': ids[2].astype(int),
