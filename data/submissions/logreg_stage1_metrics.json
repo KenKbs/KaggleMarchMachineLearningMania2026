@@ -1,0 +1,48 @@
+{
+  "men": {
+    "brier_pooled": 0.2097626140922012,
+    "brier_by_year": {
+      "2021": 0.2171460601274314,
+      "2022": 0.22018550851735652,
+      "2023": 0.20552498090831217,
+      "2024": 0.19630410750279767
+    },
+    "best_params": {
+      "solver": "liblinear",
+      "penalty": "l1",
+      "class_weight": null,
+      "C": 0.0088584308
+    },
+    "n_trials": 30
+  },
+  "women": {
+    "brier_pooled": 0.14519289435549473,
+    "brier_by_year": {
+      "2021": 0.14380263423123207,
+      "2022": 0.15503853078102978,
+      "2023": 0.16302067852821342,
+      "2024": 0.11882673327707002
+    },
+    "best_params": {
+      "solver": "lbfgs",
+      "penalty": "l2",
+      "class_weight": null,
+      "C": 0.1227952806
+    },
+    "n_trials": 30
+  },
+  "years": [
+    2021,
+    2022,
+    2023,
+    2024
+  ],
+  "feature_columns": [
+    "SeedDiff",
+    "seed_missing_any",
+    "WinPctDiff",
+    "PointMarginDiff",
+    "Last10WinPctDiff",
+    "Last10PointMarginDiff"
+  ]
+}
