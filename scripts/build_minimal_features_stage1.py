@@ -279,22 +279,21 @@ def validate_pair_table(df: pd.DataFrame, with_target: bool, table_name: str) ->
 
 
 GenderPrefix = Literal["M", "W"] # Gender prefix for function definition
-def build_gender_pipeline(prefix: GenderPrefix) -> tuple[pd.DataFrame, pd.DataFrame]:
+def build_gender_pipeline(prefix: GenderPrefix) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Pipeline to run everything above for men or women
     - loads the three raw CSV's for the three stages of data: RegularSeasonCompactResults, NCAATourneyCompactResults and NCAATourneySeeds.
     - Builds team features + seed table
     - Builds cacnonical tournament matchcups
     - Builds training features + validates them with a quick sanity check
     - team_feats is useful as a lookup table 
+    - seed_table useful as a lookup table (season, teamid, seednum)
     - train_feat is the model ready training dataset (X+y)
-
+    
     Args:
         prefix (str): M for men W for women
 
     Returns:
-        tuple[pd.DataFrame, pd.DataFrame]: team features: team-level features for each season (one Row = TeamID, Season, TeamStats) (How good was Team X in Season Y?)
-                                           Train features: per matcchup table build from tournament games (historical) One Row = (Season, Team1ID, Team2ID) for a tournament game
-                                           train features --> SeedDiff, WinPctDiff, PointMarginDiff, Last10WinPctDiff etc. (also includes target (if team1 won else 0)
+        tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]: team features, seed table, and train features
     """
     reg = pd.read_csv(RAW_DIR / f'{prefix}RegularSeasonCompactResults.csv')
     tour = pd.read_csv(RAW_DIR / f'{prefix}NCAATourneyCompactResults.csv')
@@ -307,7 +306,7 @@ def build_gender_pipeline(prefix: GenderPrefix) -> tuple[pd.DataFrame, pd.DataFr
     train_feat = attach_pair_features(train_pairs, team_feats, seed_table, include_target=True)
     validate_pair_table(train_feat, with_target=True, table_name=f'{prefix} train')
 
-    return team_feats, train_feat
+    return team_feats, seed_table, train_feat
 
 
 def build_inference_features(
@@ -357,33 +356,8 @@ def main() -> None:
     CLEAN_DIR.mkdir(parents=True, exist_ok=True)
     assert_seed_parser_examples()
 
-    men_reg = pd.read_csv(RAW_DIR / 'MRegularSeasonCompactResults.csv')
-    women_reg = pd.read_csv(RAW_DIR / 'WRegularSeasonCompactResults.csv')
-    men_seeds_raw = pd.read_csv(RAW_DIR / 'MNCAATourneySeeds.csv')
-    women_seeds_raw = pd.read_csv(RAW_DIR / 'WNCAATourneySeeds.csv')
-    men_tour = pd.read_csv(RAW_DIR / 'MNCAATourneyCompactResults.csv')
-    women_tour = pd.read_csv(RAW_DIR / 'WNCAATourneyCompactResults.csv')
-
-    men_team_feats = build_team_season_features(men_reg)
-    women_team_feats = build_team_season_features(women_reg)
-    men_seed_table = build_seed_table(men_seeds_raw)
-    women_seed_table = build_seed_table(women_seeds_raw)
-
-    men_train = attach_pair_features(
-        make_canonical_tourney_matchups(men_tour),
-        men_team_feats,
-        men_seed_table,
-        include_target=True,
-    )
-    women_train = attach_pair_features(
-        make_canonical_tourney_matchups(women_tour),
-        women_team_feats,
-        women_seed_table,
-        include_target=True,
-    )
-
-    validate_pair_table(men_train, with_target=True, table_name='men train')
-    validate_pair_table(women_train, with_target=True, table_name='women train')
+    men_team_feats, men_seed_table, men_train = build_gender_pipeline('M')
+    women_team_feats, women_seed_table, women_train = build_gender_pipeline('W')
 
     sample_sub = pd.read_csv(RAW_DIR / 'SampleSubmissionStage1.csv')
     inference = build_inference_features(
