@@ -577,6 +577,9 @@ def main() -> None:
     metrics = {
         "men": men_metrics,
         "women": women_metrics,
+        "overall": {
+            "brier_pooled": float(brier_score_loss(oof_all["target"], oof_all["PredProb"]))
+        },
         "years": years,
         "feature_columns": FEATURE_COLS,
     }
@@ -589,6 +592,10 @@ def main() -> None:
     print(f" - {args.output_metrics_path}")
     print(f"men_brier_pooled_2022_2025={men_metrics['brier_pooled']:.6f}")
     print(f"women_brier_pooled_2022_2025={women_metrics['brier_pooled']:.6f}")
+    print(
+        "overall_brier_pooled_2022_2025="
+        f"{metrics['overall']['brier_pooled']:.6f}"
+    )
 
 
 if __name__ == "__main__":
