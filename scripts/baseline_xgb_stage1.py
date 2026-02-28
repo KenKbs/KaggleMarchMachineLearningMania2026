@@ -88,15 +88,6 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="XGBoost internal verbosity (0=silent, 1=warning, 2=info, 3=debug).",
     )
-    parser.add_argument(
-        "--xgb-fit-verbose",
-        type=int,
-        default=0,
-        help=(
-            "If >0, prints XGBoost eval metric every N boosting rounds during OOF fits "
-            "(uses validation fold as eval_set)."
-        ),
-    )
     return parser.parse_args()
 
 
@@ -179,7 +170,6 @@ def rolling_oof_predict_xgb(
     random_state: int,
     n_jobs: int,
     xgb_verbosity: int,
-    xgb_fit_verbose: int,
     verbose_level: int,
     division_name: str,
 ) -> pd.DataFrame:
@@ -214,11 +204,7 @@ def rolling_oof_predict_xgb(
             n_jobs=n_jobs,
             xgb_verbosity=xgb_verbosity,
         )
-        fit_kwargs: dict[str, Any] = {}
-        if xgb_fit_verbose > 0:
-            fit_kwargs["eval_set"] = [(valid_fold[FEATURE_COLS], valid_fold["target"])]
-            fit_kwargs["verbose"] = xgb_fit_verbose
-        model.fit(train_fold[FEATURE_COLS], train_fold["target"], **fit_kwargs)
+        model.fit(train_fold[FEATURE_COLS], train_fold["target"])
         probs = model.predict_proba(valid_fold[FEATURE_COLS])[:, 1]
 
         fold_out = valid_fold[["Season", "Team1ID", "Team2ID", "target"]].copy()
@@ -244,7 +230,6 @@ def tune_division_xgb(
     random_state: int,
     n_jobs: int,
     xgb_verbosity: int,
-    xgb_fit_verbose: int,
     verbose_level: int,
     progress_every: int,
     division_name: str,
@@ -264,7 +249,7 @@ def tune_division_xgb(
     if verbose_level >= 1:
         print(
             f"[{division_name}] tuning start: n_iter={n_iter}, n_jobs={n_jobs}, "
-            f"xgb_verbosity={xgb_verbosity}, xgb_fit_verbose={xgb_fit_verbose}"
+            f"xgb_verbosity={xgb_verbosity}"
         )
 
     years_str = "|".join(str(y) for y in years)
@@ -276,7 +261,6 @@ def tune_division_xgb(
             random_state=random_state,
             n_jobs=n_jobs,
             xgb_verbosity=xgb_verbosity,
-            xgb_fit_verbose=xgb_fit_verbose,
             verbose_level=verbose_level,
             division_name=division_name,
         )
@@ -431,8 +415,6 @@ def main() -> None:
         raise ValueError("--n-jobs must be != 0")
     if args.progress_every <= 0:
         raise ValueError("--progress-every must be > 0")
-    if args.xgb_fit_verbose < 0:
-        raise ValueError("--xgb-fit-verbose must be >= 0")
 
     run_id = uuid.uuid4().hex
     run_timestamp_utc = datetime.now(timezone.utc).isoformat()
@@ -441,7 +423,7 @@ def main() -> None:
         print(
             f"Run config: years={years} n_iter={args.n_iter} n_jobs={args.n_jobs} "
             f"verbose={args.verbose} progress_every={args.progress_every} "
-            f"xgb_verbosity={args.xgb_verbosity} xgb_fit_verbose={args.xgb_fit_verbose}"
+            f"xgb_verbosity={args.xgb_verbosity}"
         )
 
     men_train = pd.read_csv(args.men_train_path)
@@ -477,7 +459,6 @@ def main() -> None:
         random_state=args.random_state,
         n_jobs=args.n_jobs,
         xgb_verbosity=args.xgb_verbosity,
-        xgb_fit_verbose=args.xgb_fit_verbose,
         verbose_level=args.verbose,
         progress_every=args.progress_every,
         division_name="men",
@@ -491,7 +472,6 @@ def main() -> None:
         random_state=args.random_state + 1,
         n_jobs=args.n_jobs,
         xgb_verbosity=args.xgb_verbosity,
-        xgb_fit_verbose=args.xgb_fit_verbose,
         verbose_level=args.verbose,
         progress_every=args.progress_every,
         division_name="women",
