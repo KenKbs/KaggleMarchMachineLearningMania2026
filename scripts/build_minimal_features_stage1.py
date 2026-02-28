@@ -21,6 +21,40 @@ H2H_FEATURE_COLS = [
     'H2H_Team1_AvgWinMargin_3y',
     'H2H_Team2_AvgWinMargin_3y',
 ]
+ADVANCED_TEAM_FEATURE_COLS = [
+    'Advanced_OffRtg',
+    'Advanced_DefRtg',
+    'Advanced_eFG',
+    'Advanced_TOVPct',
+    'Advanced_ORR',
+    'Advanced_FTr',
+    'Advanced_Pace',
+]
+LAST10_ADVANCED_TEAM_FEATURE_COLS = [
+    'Last10_Advanced_OffRtg',
+    'Last10_Advanced_DefRtg',
+    'Last10_Advanced_eFG',
+    'Last10_Advanced_TOVPct',
+    'Last10_Advanced_ORR',
+    'Last10_Advanced_FTr',
+    'Last10_Advanced_Pace',
+]
+ADVANCED_DIFF_FEATURE_COLS = [
+    'OffRtgDiff',
+    'DefRtgDiff',
+    'eFGDiff',
+    'TOVPctDiff',
+    'ORRDiff',
+    'FTrDiff',
+    'PaceDiff',
+    'Last10_OffRtgDiff',
+    'Last10_DefRtgDiff',
+    'Last10_eFGDiff',
+    'Last10_TOVPctDiff',
+    'Last10_ORRDiff',
+    'Last10_FTrDiff',
+    'Last10_PaceDiff',
+]
 
 
 def parse_seed_value(seed: str) -> int | float:
@@ -218,7 +252,130 @@ def build_team_game_rows(reg_compact: pd.DataFrame) -> pd.DataFrame:
     return rows
 
 
-def build_team_season_features(reg_compact: pd.DataFrame) -> pd.DataFrame:
+def safe_divide(num: pd.Series, den: pd.Series) -> pd.Series:
+    """Elementwise safe divide with 0.0 fallback when denominator is <= 0."""
+    den = den.astype(float)
+    num = num.astype(float)
+    out = pd.Series(np.zeros(len(num), dtype=float), index=num.index)
+    mask = den > 0
+    out.loc[mask] = num.loc[mask] / den.loc[mask]
+    return out
+
+
+def build_team_game_rows_detailed(reg_detailed: pd.DataFrame) -> pd.DataFrame:
+    """Turn detailed regular-season games into one row per team-game with team/opponent stats."""
+    w_rows = reg_detailed[
+        [
+            'Season', 'DayNum', 'WTeamID', 'LTeamID', 'WScore', 'LScore',
+            'WFGM', 'WFGA', 'WFGM3', 'WFGA3', 'WFTM', 'WFTA', 'WOR', 'WDR', 'WAst', 'WTO',
+            'WStl', 'WBlk', 'WPF', 'LFGM', 'LFGA', 'LFGM3', 'LFGA3', 'LFTM', 'LFTA', 'LOR',
+            'LDR', 'LAst', 'LTO', 'LStl', 'LBlk', 'LPF',
+        ]
+    ].copy()
+    w_rows = w_rows.rename(
+        columns={
+            'WTeamID': 'TeamID',
+            'LTeamID': 'OppTeamID',
+            'WScore': 'TeamScore',
+            'LScore': 'OppScore',
+            'WFGM': 'TeamFGM',
+            'WFGA': 'TeamFGA',
+            'WFGM3': 'TeamFGM3',
+            'WFGA3': 'TeamFGA3',
+            'WFTM': 'TeamFTM',
+            'WFTA': 'TeamFTA',
+            'WOR': 'TeamOR',
+            'WDR': 'TeamDR',
+            'WAst': 'TeamAst',
+            'WTO': 'TeamTO',
+            'WStl': 'TeamStl',
+            'WBlk': 'TeamBlk',
+            'WPF': 'TeamPF',
+            'LFGM': 'OppFGM',
+            'LFGA': 'OppFGA',
+            'LFGM3': 'OppFGM3',
+            'LFGA3': 'OppFGA3',
+            'LFTM': 'OppFTM',
+            'LFTA': 'OppFTA',
+            'LOR': 'OppOR',
+            'LDR': 'OppDR',
+            'LAst': 'OppAst',
+            'LTO': 'OppTO',
+            'LStl': 'OppStl',
+            'LBlk': 'OppBlk',
+            'LPF': 'OppPF',
+        }
+    )
+
+    l_rows = reg_detailed[
+        [
+            'Season', 'DayNum', 'LTeamID', 'WTeamID', 'LScore', 'WScore',
+            'LFGM', 'LFGA', 'LFGM3', 'LFGA3', 'LFTM', 'LFTA', 'LOR', 'LDR', 'LAst', 'LTO',
+            'LStl', 'LBlk', 'LPF', 'WFGM', 'WFGA', 'WFGM3', 'WFGA3', 'WFTM', 'WFTA', 'WOR',
+            'WDR', 'WAst', 'WTO', 'WStl', 'WBlk', 'WPF',
+        ]
+    ].copy()
+    l_rows = l_rows.rename(
+        columns={
+            'LTeamID': 'TeamID',
+            'WTeamID': 'OppTeamID',
+            'LScore': 'TeamScore',
+            'WScore': 'OppScore',
+            'LFGM': 'TeamFGM',
+            'LFGA': 'TeamFGA',
+            'LFGM3': 'TeamFGM3',
+            'LFGA3': 'TeamFGA3',
+            'LFTM': 'TeamFTM',
+            'LFTA': 'TeamFTA',
+            'LOR': 'TeamOR',
+            'LDR': 'TeamDR',
+            'LAst': 'TeamAst',
+            'LTO': 'TeamTO',
+            'LStl': 'TeamStl',
+            'LBlk': 'TeamBlk',
+            'LPF': 'TeamPF',
+            'WFGM': 'OppFGM',
+            'WFGA': 'OppFGA',
+            'WFGM3': 'OppFGM3',
+            'WFGA3': 'OppFGA3',
+            'WFTM': 'OppFTM',
+            'WFTA': 'OppFTA',
+            'WOR': 'OppOR',
+            'WDR': 'OppDR',
+            'WAst': 'OppAst',
+            'WTO': 'OppTO',
+            'WStl': 'OppStl',
+            'WBlk': 'OppBlk',
+            'WPF': 'OppPF',
+        }
+    )
+
+    rows = pd.concat([w_rows, l_rows], ignore_index=True)
+    rows['TeamPoss'] = rows['TeamFGA'] - rows['TeamOR'] + rows['TeamTO'] + 0.475 * rows['TeamFTA']
+    rows['OppPoss'] = rows['OppFGA'] - rows['OppOR'] + rows['OppTO'] + 0.475 * rows['OppFTA']
+    return rows
+
+
+def compute_advanced_metrics_from_agg(
+    agg: pd.DataFrame,
+    prefix: str,
+) -> pd.DataFrame:
+    """Compute advanced box-score metrics from aggregated numerator/denominator sums."""
+    out = agg[['Season', 'TeamID']].copy()
+    out[f'{prefix}OffRtg'] = 100.0 * safe_divide(agg['TeamScore'], agg['TeamPoss'])
+    out[f'{prefix}DefRtg'] = 100.0 * safe_divide(agg['OppScore'], agg['OppPoss'])
+    out[f'{prefix}eFG'] = safe_divide(agg['TeamFGM'] + 0.5 * agg['TeamFGM3'], agg['TeamFGA'])
+    out[f'{prefix}TOVPct'] = safe_divide(
+        agg['TeamTO'],
+        agg['TeamFGA'] + 0.475 * agg['TeamFTA'] + agg['TeamTO'],
+    )
+    out[f'{prefix}ORR'] = safe_divide(agg['TeamOR'], agg['TeamOR'] + agg['OppDR'])
+    out[f'{prefix}FTr'] = safe_divide(agg['TeamFTA'], agg['TeamFGA'])
+    out[f'{prefix}Pace'] = safe_divide(agg['TeamPoss'], agg['Games'])
+    return out
+
+
+def build_team_season_features(reg_compact: pd.DataFrame, reg_detailed: pd.DataFrame) -> pd.DataFrame:
     """Build a per-team, per-season summary table from regular season games
     Baseline features / metadata per team
 
@@ -257,6 +414,56 @@ def build_team_season_features(reg_compact: pd.DataFrame) -> pd.DataFrame:
     last10['Last10_WinPct'] = last10['Last10Wins'] / last10['Last10Games']
 
     feats = season_agg.merge(last10[['Season', 'TeamID', 'Last10_WinPct', 'Last10PointMargin']], on=['Season', 'TeamID'], how='left')
+
+    detailed_rows = build_team_game_rows_detailed(reg_detailed)
+    detailed_agg = (
+        detailed_rows.groupby(['Season', 'TeamID'], as_index=False)
+        .agg(
+            Games=('TeamScore', 'size'),
+            TeamScore=('TeamScore', 'sum'),
+            OppScore=('OppScore', 'sum'),
+            TeamFGM=('TeamFGM', 'sum'),
+            TeamFGA=('TeamFGA', 'sum'),
+            TeamFGM3=('TeamFGM3', 'sum'),
+            TeamFTA=('TeamFTA', 'sum'),
+            TeamTO=('TeamTO', 'sum'),
+            TeamOR=('TeamOR', 'sum'),
+            OppDR=('OppDR', 'sum'),
+            TeamPoss=('TeamPoss', 'sum'),
+            OppPoss=('OppPoss', 'sum'),
+        )
+    )
+    advanced = compute_advanced_metrics_from_agg(detailed_agg, prefix='Advanced_')
+
+    detailed_last10 = (
+        detailed_rows.sort_values(['Season', 'TeamID', 'DayNum'])
+        .groupby(['Season', 'TeamID'], as_index=False)
+        .tail(10)
+    )
+    detailed_last10_agg = (
+        detailed_last10.groupby(['Season', 'TeamID'], as_index=False)
+        .agg(
+            Games=('TeamScore', 'size'),
+            TeamScore=('TeamScore', 'sum'),
+            OppScore=('OppScore', 'sum'),
+            TeamFGM=('TeamFGM', 'sum'),
+            TeamFGA=('TeamFGA', 'sum'),
+            TeamFGM3=('TeamFGM3', 'sum'),
+            TeamFTA=('TeamFTA', 'sum'),
+            TeamTO=('TeamTO', 'sum'),
+            TeamOR=('TeamOR', 'sum'),
+            OppDR=('OppDR', 'sum'),
+            TeamPoss=('TeamPoss', 'sum'),
+            OppPoss=('OppPoss', 'sum'),
+        )
+    )
+    advanced_last10 = compute_advanced_metrics_from_agg(
+        detailed_last10_agg,
+        prefix='Last10_Advanced_',
+    )
+
+    feats = feats.merge(advanced, on=['Season', 'TeamID'], how='left')
+    feats = feats.merge(advanced_last10, on=['Season', 'TeamID'], how='left')
     feats = feats[[
         'Season',
         'TeamID',
@@ -264,6 +471,8 @@ def build_team_season_features(reg_compact: pd.DataFrame) -> pd.DataFrame:
         'RegularSeason_PointMarginPerGame',
         'Last10_WinPct',
         'Last10PointMargin',
+        *ADVANCED_TEAM_FEATURE_COLS,
+        *LAST10_ADVANCED_TEAM_FEATURE_COLS,
     ]].copy()
     return feats
 
@@ -524,6 +733,20 @@ def attach_pair_features(
             'RegularSeason_PointMarginPerGame': 'Team1_PointMarginPerGame',
             'Last10_WinPct': 'Team1_Last10_WinPct',
             'Last10PointMargin': 'Team1_Last10_PointMargin',
+            'Advanced_OffRtg': 'Team1_Advanced_OffRtg',
+            'Advanced_DefRtg': 'Team1_Advanced_DefRtg',
+            'Advanced_eFG': 'Team1_Advanced_eFG',
+            'Advanced_TOVPct': 'Team1_Advanced_TOVPct',
+            'Advanced_ORR': 'Team1_Advanced_ORR',
+            'Advanced_FTr': 'Team1_Advanced_FTr',
+            'Advanced_Pace': 'Team1_Advanced_Pace',
+            'Last10_Advanced_OffRtg': 'Team1_Last10_Advanced_OffRtg',
+            'Last10_Advanced_DefRtg': 'Team1_Last10_Advanced_DefRtg',
+            'Last10_Advanced_eFG': 'Team1_Last10_Advanced_eFG',
+            'Last10_Advanced_TOVPct': 'Team1_Last10_Advanced_TOVPct',
+            'Last10_Advanced_ORR': 'Team1_Last10_Advanced_ORR',
+            'Last10_Advanced_FTr': 'Team1_Last10_Advanced_FTr',
+            'Last10_Advanced_Pace': 'Team1_Last10_Advanced_Pace',
         }
     )
     t2 = team_feats.rename(
@@ -533,6 +756,20 @@ def attach_pair_features(
             'RegularSeason_PointMarginPerGame': 'Team2_PointMarginPerGame',
             'Last10_WinPct': 'Team2_Last10_WinPct',
             'Last10PointMargin': 'Team2_Last10_PointMargin',
+            'Advanced_OffRtg': 'Team2_Advanced_OffRtg',
+            'Advanced_DefRtg': 'Team2_Advanced_DefRtg',
+            'Advanced_eFG': 'Team2_Advanced_eFG',
+            'Advanced_TOVPct': 'Team2_Advanced_TOVPct',
+            'Advanced_ORR': 'Team2_Advanced_ORR',
+            'Advanced_FTr': 'Team2_Advanced_FTr',
+            'Advanced_Pace': 'Team2_Advanced_Pace',
+            'Last10_Advanced_OffRtg': 'Team2_Last10_Advanced_OffRtg',
+            'Last10_Advanced_DefRtg': 'Team2_Last10_Advanced_DefRtg',
+            'Last10_Advanced_eFG': 'Team2_Last10_Advanced_eFG',
+            'Last10_Advanced_TOVPct': 'Team2_Last10_Advanced_TOVPct',
+            'Last10_Advanced_ORR': 'Team2_Last10_Advanced_ORR',
+            'Last10_Advanced_FTr': 'Team2_Last10_Advanced_FTr',
+            'Last10_Advanced_Pace': 'Team2_Last10_Advanced_Pace',
         }
     )
 
@@ -581,6 +818,51 @@ def attach_pair_features(
     merged['Last10PointMarginDiff'] = (
         merged['Team1_Last10_PointMargin'] - merged['Team2_Last10_PointMargin']
     )
+
+    advanced_raw_cols = [
+        'Team1_Advanced_OffRtg', 'Team1_Advanced_DefRtg', 'Team1_Advanced_eFG',
+        'Team1_Advanced_TOVPct', 'Team1_Advanced_ORR', 'Team1_Advanced_FTr', 'Team1_Advanced_Pace',
+        'Team2_Advanced_OffRtg', 'Team2_Advanced_DefRtg', 'Team2_Advanced_eFG',
+        'Team2_Advanced_TOVPct', 'Team2_Advanced_ORR', 'Team2_Advanced_FTr', 'Team2_Advanced_Pace',
+        'Team1_Last10_Advanced_OffRtg', 'Team1_Last10_Advanced_DefRtg', 'Team1_Last10_Advanced_eFG',
+        'Team1_Last10_Advanced_TOVPct', 'Team1_Last10_Advanced_ORR', 'Team1_Last10_Advanced_FTr',
+        'Team1_Last10_Advanced_Pace',
+        'Team2_Last10_Advanced_OffRtg', 'Team2_Last10_Advanced_DefRtg', 'Team2_Last10_Advanced_eFG',
+        'Team2_Last10_Advanced_TOVPct', 'Team2_Last10_Advanced_ORR', 'Team2_Last10_Advanced_FTr',
+        'Team2_Last10_Advanced_Pace',
+    ]
+    for col in advanced_raw_cols:
+        if col in merged.columns:
+            merged[col] = merged[col].fillna(0.0)
+
+    merged['OffRtgDiff'] = merged['Team1_Advanced_OffRtg'] - merged['Team2_Advanced_OffRtg']
+    merged['DefRtgDiff'] = merged['Team1_Advanced_DefRtg'] - merged['Team2_Advanced_DefRtg']
+    merged['eFGDiff'] = merged['Team1_Advanced_eFG'] - merged['Team2_Advanced_eFG']
+    merged['TOVPctDiff'] = merged['Team1_Advanced_TOVPct'] - merged['Team2_Advanced_TOVPct']
+    merged['ORRDiff'] = merged['Team1_Advanced_ORR'] - merged['Team2_Advanced_ORR']
+    merged['FTrDiff'] = merged['Team1_Advanced_FTr'] - merged['Team2_Advanced_FTr']
+    merged['PaceDiff'] = merged['Team1_Advanced_Pace'] - merged['Team2_Advanced_Pace']
+    merged['Last10_OffRtgDiff'] = (
+        merged['Team1_Last10_Advanced_OffRtg'] - merged['Team2_Last10_Advanced_OffRtg']
+    )
+    merged['Last10_DefRtgDiff'] = (
+        merged['Team1_Last10_Advanced_DefRtg'] - merged['Team2_Last10_Advanced_DefRtg']
+    )
+    merged['Last10_eFGDiff'] = (
+        merged['Team1_Last10_Advanced_eFG'] - merged['Team2_Last10_Advanced_eFG']
+    )
+    merged['Last10_TOVPctDiff'] = (
+        merged['Team1_Last10_Advanced_TOVPct'] - merged['Team2_Last10_Advanced_TOVPct']
+    )
+    merged['Last10_ORRDiff'] = (
+        merged['Team1_Last10_Advanced_ORR'] - merged['Team2_Last10_Advanced_ORR']
+    )
+    merged['Last10_FTrDiff'] = (
+        merged['Team1_Last10_Advanced_FTr'] - merged['Team2_Last10_Advanced_FTr']
+    )
+    merged['Last10_PaceDiff'] = (
+        merged['Team1_Last10_Advanced_Pace'] - merged['Team2_Last10_Advanced_Pace']
+    )
     cols = [
         'Season',
         'Team1ID',
@@ -593,6 +875,7 @@ def attach_pair_features(
         'Last10PointMarginDiff',
         'Team1_EloPregame',
         'Team2_EloPregame',
+        *ADVANCED_DIFF_FEATURE_COLS,
         *H2H_FEATURE_COLS,
     ]
     if include_target:
@@ -637,6 +920,17 @@ def validate_pair_table(df: pd.DataFrame, with_target: bool, table_name: str) ->
         margin_cols = ['H2H_Team1_AvgWinMargin_3y', 'H2H_Team2_AvgWinMargin_3y']
         if (df[margin_cols] < 0).any().any():
             raise ValueError(f'{table_name}: H2H average win-margin features contain negative values')
+
+    adv_present = [c for c in ADVANCED_DIFF_FEATURE_COLS if c in df.columns]
+    if adv_present:
+        missing_adv = [c for c in ADVANCED_DIFF_FEATURE_COLS if c not in df.columns]
+        if missing_adv:
+            raise ValueError(f'{table_name}: missing advanced diff columns: {missing_adv}')
+        if df[ADVANCED_DIFF_FEATURE_COLS].isna().any().any():
+            missing_count = int(df[ADVANCED_DIFF_FEATURE_COLS].isna().sum().sum())
+            raise ValueError(f'{table_name}: advanced diff columns contain NaN values: {missing_count}')
+        if not np.isfinite(df[ADVANCED_DIFF_FEATURE_COLS].to_numpy()).all():
+            raise ValueError(f'{table_name}: advanced diff columns contain non-finite values')
 
 
 def validate_elo_feature_table(df: pd.DataFrame, table_name: str) -> None:
@@ -699,13 +993,14 @@ def build_gender_pipeline(
             team features, seed table, regular end Elo table, season end Elo table, and train features
     """
     reg = pd.read_csv(RAW_DIR / f'{prefix}RegularSeasonCompactResults.csv')
+    reg_detailed = pd.read_csv(RAW_DIR / f'{prefix}RegularSeasonDetailedResults.csv')
     tour = pd.read_csv(RAW_DIR / f'{prefix}NCAATourneyCompactResults.csv')
     seeds = pd.read_csv(RAW_DIR / f'{prefix}NCAATourneySeeds.csv')
 
     elo_games, regular_end_elo, season_end_elo = build_elo_tables(reg, tour)
     tourney_elo = elo_games[elo_games['GameType'] == 'NCAA'].copy()
 
-    team_feats = build_team_season_features(reg)
+    team_feats = build_team_season_features(reg, reg_detailed)
     seed_table = build_seed_table(seeds)
 
     train_pairs = make_canonical_tourney_matchups(tour, tourney_elo=tourney_elo)

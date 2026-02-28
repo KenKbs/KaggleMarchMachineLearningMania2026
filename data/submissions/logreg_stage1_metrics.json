@@ -1,38 +1,38 @@
 {
   "men": {
-    "brier_pooled": 0.1944112364273263,
+    "brier_pooled": 0.19404364711322167,
     "brier_by_year": {
-      "2022": 0.22222899945864377,
-      "2023": 0.20724336401433607,
-      "2024": 0.19286820718802827,
-      "2025": 0.15530437504829706
+      "2022": 0.22203236156873654,
+      "2023": 0.2043226369934973,
+      "2024": 0.19332735460125175,
+      "2025": 0.15649223528940123
     },
     "best_params": {
       "solver": "liblinear",
       "penalty": "l1",
       "class_weight": null,
-      "C": 0.0294986645
+      "C": 0.0321781036
     },
     "n_trials": 5000
   },
   "women": {
-    "brier_pooled": 0.13606262668438487,
+    "brier_pooled": 0.13798339448721825,
     "brier_by_year": {
-      "2022": 0.15112040081315956,
-      "2023": 0.16400397611650053,
-      "2024": 0.11569417962358326,
-      "2025": 0.11343195018429615
+      "2022": 0.15066793532229147,
+      "2023": 0.1687161664930299,
+      "2024": 0.11933201847207342,
+      "2025": 0.11321745766147823
     },
     "best_params": {
       "solver": "liblinear",
-      "penalty": "l2",
+      "penalty": "l1",
       "class_weight": null,
-      "C": 0.0827659964
+      "C": 0.1756617364
     },
     "n_trials": 5000
   },
   "overall": {
-    "brier_pooled": 0.1652369315558556
+    "brier_pooled": 0.16601352080021997
   },
   "years": [
     2022,
@@ -49,6 +49,20 @@
     "Last10PointMarginDiff",
     "Team1_EloPregame",
     "Team2_EloPregame",
+    "OffRtgDiff",
+    "DefRtgDiff",
+    "eFGDiff",
+    "TOVPctDiff",
+    "ORRDiff",
+    "FTrDiff",
+    "PaceDiff",
+    "Last10_OffRtgDiff",
+    "Last10_DefRtgDiff",
+    "Last10_eFGDiff",
+    "Last10_TOVPctDiff",
+    "Last10_ORRDiff",
+    "Last10_FTrDiff",
+    "Last10_PaceDiff",
     "H2H_Team1_Wins_3y",
     "H2H_Team2_Wins_3y",
     "H2H_Team1_AvgWinMargin_3y",
