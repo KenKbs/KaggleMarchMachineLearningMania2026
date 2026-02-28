@@ -23,7 +23,7 @@ FEATURE_COLS = [
 ]
 TRAIN_REQUIRED_COLS = ["Season", "Team1ID", "Team2ID", "target", *FEATURE_COLS]
 INFER_REQUIRED_COLS = ["Season", "Team1ID", "Team2ID", *FEATURE_COLS]
-YEARS_DEFAULT = [2021, 2022, 2023, 2024]
+YEARS_DEFAULT = [2022, 2023, 2024, 2025]
 
 
 def parse_args() -> argparse.Namespace:
@@ -54,7 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-oof-path",
         type=Path,
-        default=Path("data/submissions/logreg_stage1_oof_2021_2024.csv"),
+        default=Path("data/submissions/logreg_stage1_oof_2022_2025.csv"),
     )
     parser.add_argument(
         "--output-preds-path",
@@ -330,7 +330,7 @@ def tune_division(
             matchup keys, feature columns used by `rolling_oof_predict`, and
             binary `target` (0/1).
         years: Validation seasons for rolling evaluation (for example
-            `[2021, 2022, 2023, 2024]`).
+            `[2022, 2023, 2024, 2025]`).
         n_iter: Number of random hyperparameter configurations to evaluate.
         random_state: Seed used for deterministic candidate sampling and model
             reproducibility.
@@ -585,8 +585,8 @@ def main() -> None:
     print(f" - {args.output_oof_path} rows={len(oof_all)}")
     print(f" - {args.output_preds_path} rows={len(preds_out)}")
     print(f" - {args.output_metrics_path}")
-    print(f"men_brier_pooled_2021_2024={men_metrics['brier_pooled']:.6f}")
-    print(f"women_brier_pooled_2021_2024={women_metrics['brier_pooled']:.6f}")
+    print(f"men_brier_pooled_2022_2025={men_metrics['brier_pooled']:.6f}")
+    print(f"women_brier_pooled_2022_2025={women_metrics['brier_pooled']:.6f}")
 
 
 if __name__ == "__main__":
