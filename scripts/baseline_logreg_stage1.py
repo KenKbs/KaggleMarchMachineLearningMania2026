@@ -20,6 +20,8 @@ FEATURE_COLS = [
     "PointMarginDiff",
     "Last10WinPctDiff",
     "Last10PointMarginDiff",
+    "EloDiff",
+    "EloWinProbTeam1",
 ]
 TRAIN_REQUIRED_COLS = ["Season", "Team1ID", "Team2ID", "target", *FEATURE_COLS]
 INFER_REQUIRED_COLS = ["Season", "Team1ID", "Team2ID", *FEATURE_COLS]

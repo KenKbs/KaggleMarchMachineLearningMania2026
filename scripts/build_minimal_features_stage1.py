@@ -7,6 +7,9 @@ import pandas as pd
 
 RAW_DIR = Path('data/raw')
 CLEAN_DIR = Path('data/cleaned')
+ELO_BASE = 1500.0
+ELO_K = 20.0
+ELO_CARRYOVER = 0.75
 
 
 def parse_seed_value(seed: str) -> int | float:
@@ -28,6 +31,130 @@ def assert_seed_parser_examples() -> None:
     assert parse_seed_value('W01') == 1 
     assert parse_seed_value('X16a') == 16
     assert parse_seed_value('Z12b') == 12
+
+
+def elo_expected_score(rating_a: float, rating_b: float) -> float:
+    """Return Elo expected score for team A against team B."""
+    return 1.0 / (1.0 + 10.0 ** ((rating_b - rating_a) / 400.0))
+
+
+def assert_elo_examples() -> None:
+    """Sanity checks for Elo behavior."""
+    p_equal = elo_expected_score(1500.0, 1500.0)
+    assert abs(p_equal - 0.5) < 1e-12
+
+    p_favorite = elo_expected_score(1700.0, 1300.0)
+    p_underdog = elo_expected_score(1300.0, 1700.0)
+    assert p_favorite > 0.5
+    assert p_underdog < 0.5
+    assert abs((p_favorite + p_underdog) - 1.0) < 1e-12
+
+
+def _season_start_rating(prev_end: float | None) -> float:
+    """Compute season start Elo with soft carryover."""
+    if prev_end is None:
+        return ELO_BASE
+    return ELO_CARRYOVER * prev_end + (1.0 - ELO_CARRYOVER) * ELO_BASE
+
+
+def build_elo_tables(
+    reg_compact: pd.DataFrame,
+    tour_compact: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Build Elo game timeline plus regular-season and season-end snapshots."""
+    key_cols = ['Season', 'DayNum', 'WTeamID', 'LTeamID']
+    reg_games = reg_compact[key_cols].copy()
+    reg_games['GameType'] = 'Regular'
+    tour_games = tour_compact[key_cols].copy()
+    tour_games['GameType'] = 'NCAA'
+
+    all_games = pd.concat([reg_games, tour_games], ignore_index=True)
+    all_games = all_games.sort_values(
+        ['Season', 'DayNum', 'WTeamID', 'LTeamID', 'GameType']
+    ).reset_index(drop=True)
+
+    key_dupes = all_games.duplicated(subset=key_cols).sum()
+    if key_dupes:
+        raise ValueError(f'elo games: duplicate game keys found: {key_dupes}')
+
+    elo_records: list[dict[str, float | int | str]] = []
+    regular_end_records: list[dict[str, float | int]] = []
+    season_end_records: list[dict[str, float | int]] = []
+
+    prev_end_ratings: dict[int, float] = {}
+    seasons = sorted(all_games['Season'].unique())
+
+    for season in seasons:
+        season_games = all_games[all_games['Season'] == season].copy()
+        season_games = season_games.sort_values(
+            ['DayNum', 'WTeamID', 'LTeamID', 'GameType']
+        )
+
+        teams = sorted(set(season_games['WTeamID']) | set(season_games['LTeamID']))
+        ratings: dict[int, float] = {
+            int(team_id): _season_start_rating(prev_end_ratings.get(int(team_id)))
+            for team_id in teams
+        }
+
+        regular_snapshot_captured = False
+        regular_end_ratings: dict[int, float] | None = None
+
+        for row in season_games.itertuples(index=False):
+            if row.GameType != 'Regular' and not regular_snapshot_captured:
+                regular_end_ratings = ratings.copy()
+                regular_snapshot_captured = True
+
+            winner_id = int(row.WTeamID)
+            loser_id = int(row.LTeamID)
+            winner_rating = ratings[winner_id]
+            loser_rating = ratings[loser_id]
+
+            expected_winner = elo_expected_score(winner_rating, loser_rating)
+            expected_loser = 1.0 - expected_winner
+            elo_records.append(
+                {
+                    'Season': int(row.Season),
+                    'DayNum': int(row.DayNum),
+                    'WTeamID': winner_id,
+                    'LTeamID': loser_id,
+                    'GameType': str(row.GameType),
+                    'W_EloPregame': winner_rating,
+                    'L_EloPregame': loser_rating,
+                    'W_Expected': expected_winner,
+                    'L_Expected': expected_loser,
+                }
+            )
+
+            ratings[winner_id] = winner_rating + ELO_K * (1.0 - expected_winner)
+            ratings[loser_id] = loser_rating + ELO_K * (0.0 - expected_loser)
+
+        if not regular_snapshot_captured:
+            regular_end_ratings = ratings.copy()
+
+        assert regular_end_ratings is not None
+        for team_id, rating in regular_end_ratings.items():
+            regular_end_records.append(
+                {'Season': int(season), 'TeamID': int(team_id), 'EloPregame': float(rating)}
+            )
+        for team_id, rating in ratings.items():
+            season_end_records.append(
+                {'Season': int(season), 'TeamID': int(team_id), 'EloSeasonEnd': float(rating)}
+            )
+
+        prev_end_ratings = ratings.copy()
+
+    elo_games = pd.DataFrame(elo_records)
+    regular_end_snapshot = pd.DataFrame(regular_end_records)
+    season_end_snapshot = pd.DataFrame(season_end_records)
+
+    reg_dupes = regular_end_snapshot.duplicated(subset=['Season', 'TeamID']).sum()
+    if reg_dupes:
+        raise ValueError(f'regular end elo snapshot: duplicate (Season, TeamID) rows found: {reg_dupes}')
+    end_dupes = season_end_snapshot.duplicated(subset=['Season', 'TeamID']).sum()
+    if end_dupes:
+        raise ValueError(f'season end elo snapshot: duplicate (Season, TeamID) rows found: {end_dupes}')
+
+    return elo_games, regular_end_snapshot, season_end_snapshot
 
 
 def build_team_game_rows(reg_compact: pd.DataFrame) -> pd.DataFrame:
@@ -144,7 +271,10 @@ def build_seed_table(seed_df: pd.DataFrame) -> pd.DataFrame:
     return seeds[['Season', 'TeamID', 'SeedNum']]
 
 
-def make_canonical_tourney_matchups(tourney_compact: pd.DataFrame) -> pd.DataFrame:
+def make_canonical_tourney_matchups(
+    tourney_compact: pd.DataFrame,
+    tourney_elo: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Convert hiistorical tournament results into a consistent training dataset format
 
     Args:
@@ -153,10 +283,52 @@ def make_canonical_tourney_matchups(tourney_compact: pd.DataFrame) -> pd.DataFra
     Returns:
         pd.DataFrame: Team1ID, Team2ID, target (= 1 if Team1 won, 0 if Team 2 won)
     """
-    out = tourney_compact[['Season', 'WTeamID', 'LTeamID']].copy()
+    key_cols = ['Season', 'DayNum', 'WTeamID', 'LTeamID']
+    out = tourney_compact[key_cols].copy()
+
+    if tourney_elo is not None:
+        required = [*key_cols, 'W_EloPregame', 'L_EloPregame']
+        missing = [c for c in required if c not in tourney_elo.columns]
+        if missing:
+            raise ValueError(f'tourney elo: missing required columns: {missing}')
+
+        elo_dupes = tourney_elo.duplicated(subset=key_cols).sum()
+        if elo_dupes:
+            raise ValueError(f'tourney elo: duplicate game keys found: {elo_dupes}')
+
+        out = out.merge(tourney_elo[required], on=key_cols, how='left')
+        missing_elo = out['W_EloPregame'].isna() | out['L_EloPregame'].isna()
+        if missing_elo.any():
+            raise ValueError(
+                f'tourney elo: missing Elo matches for {int(missing_elo.sum())} tournament rows'
+            )
+
     out['Team1ID'] = out[['WTeamID', 'LTeamID']].min(axis=1)
     out['Team2ID'] = out[['WTeamID', 'LTeamID']].max(axis=1)
     out['target'] = (out['WTeamID'] == out['Team1ID']).astype(int)
+
+    if tourney_elo is not None:
+        out['Team1_EloPregame'] = np.where(
+            out['WTeamID'] == out['Team1ID'],
+            out['W_EloPregame'],
+            out['L_EloPregame'],
+        )
+        out['Team2_EloPregame'] = np.where(
+            out['WTeamID'] == out['Team2ID'],
+            out['W_EloPregame'],
+            out['L_EloPregame'],
+        )
+        return out[
+            [
+                'Season',
+                'Team1ID',
+                'Team2ID',
+                'target',
+                'Team1_EloPregame',
+                'Team2_EloPregame',
+            ]
+        ].copy()
+
     return out[['Season', 'Team1ID', 'Team2ID', 'target']]
 
 
@@ -186,6 +358,7 @@ def attach_pair_features(
     team_feats: pd.DataFrame,
     seeds: pd.DataFrame,
     include_target: bool,
+    elo_snapshot: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Builds a feeature dataframe for training
 
@@ -226,6 +399,20 @@ def attach_pair_features(
     merged = merged.merge(s1, on=['Season', 'Team1ID'], how='left')
     merged = merged.merge(s2, on=['Season', 'Team2ID'], how='left')
 
+    if elo_snapshot is not None:
+        e1 = elo_snapshot.rename(columns={'TeamID': 'Team1ID', 'EloPregame': 'Team1_EloPregame'})
+        e2 = elo_snapshot.rename(columns={'TeamID': 'Team2ID', 'EloPregame': 'Team2_EloPregame'})
+        merged = merged.merge(e1, on=['Season', 'Team1ID'], how='left')
+        merged = merged.merge(e2, on=['Season', 'Team2ID'], how='left')
+
+    required_elo_cols = ['Team1_EloPregame', 'Team2_EloPregame']
+    missing_elo_cols = [c for c in required_elo_cols if c not in merged.columns]
+    if missing_elo_cols:
+        raise ValueError(
+            'attach_pair_features: missing Elo columns. '
+            'Provide `elo_snapshot` or pass pair_df with Team1_EloPregame/Team2_EloPregame.'
+        )
+
     merged['SeedDiff'] = merged['Team1_SeedNum'] - merged['Team2_SeedNum']
     merged['seed_missing_any'] = (
         merged['Team1_SeedNum'].isna() | merged['Team2_SeedNum'].isna()
@@ -240,6 +427,10 @@ def attach_pair_features(
     merged['Last10PointMarginDiff'] = (
         merged['Team1_Last10_PointMargin'] - merged['Team2_Last10_PointMargin']
     )
+    merged['EloDiff'] = merged['Team1_EloPregame'] - merged['Team2_EloPregame']
+    merged['EloWinProbTeam1'] = 1.0 / (
+        1.0 + 10.0 ** ((merged['Team2_EloPregame'] - merged['Team1_EloPregame']) / 400.0)
+    )
 
     cols = [
         'Season',
@@ -251,6 +442,10 @@ def attach_pair_features(
         'PointMarginDiff',
         'Last10WinPctDiff',
         'Last10PointMarginDiff',
+        'Team1_EloPregame',
+        'Team2_EloPregame',
+        'EloDiff',
+        'EloWinProbTeam1',
     ]
     if include_target:
         cols.append('target')
@@ -278,8 +473,57 @@ def validate_pair_table(df: pd.DataFrame, with_target: bool, table_name: str) ->
         raise ValueError(f'{table_name}: target contains values outside 0/1')
 
 
+def validate_elo_feature_table(df: pd.DataFrame, table_name: str) -> None:
+    """Validate Elo feature columns are present and well-formed."""
+    required = ['Team1_EloPregame', 'Team2_EloPregame', 'EloDiff', 'EloWinProbTeam1']
+    missing_cols = [c for c in required if c not in df.columns]
+    if missing_cols:
+        raise ValueError(f'{table_name}: missing Elo feature columns: {missing_cols}')
+
+    if df[required].isna().any().any():
+        missing_count = int(df[required].isna().sum().sum())
+        raise ValueError(f'{table_name}: Elo feature columns contain NaN values: {missing_count}')
+
+    if ((df['EloWinProbTeam1'] < 0) | (df['EloWinProbTeam1'] > 1)).any():
+        raise ValueError(f'{table_name}: EloWinProbTeam1 values outside [0,1]')
+
+
+def fill_missing_elo_from_carryover(
+    pair_feats: pd.DataFrame,
+    season_end_elo: pd.DataFrame,
+) -> pd.DataFrame:
+    """Fill missing Elo snapshot values using prior-season carryover."""
+    out = pair_feats.copy()
+    season_end_lookup = (
+        season_end_elo.set_index(['Season', 'TeamID'])['EloSeasonEnd'].to_dict()
+        if not season_end_elo.empty
+        else {}
+    )
+
+    def resolve_rating(season: int, team_id: int) -> float:
+        prev_end = season_end_lookup.get((int(season) - 1, int(team_id)))
+        return _season_start_rating(prev_end)
+
+    for team_col, elo_col in [('Team1ID', 'Team1_EloPregame'), ('Team2ID', 'Team2_EloPregame')]:
+        miss_mask = out[elo_col].isna()
+        if miss_mask.any():
+            replacements = [
+                resolve_rating(season, team_id)
+                for season, team_id in zip(out.loc[miss_mask, 'Season'], out.loc[miss_mask, team_col])
+            ]
+            out.loc[miss_mask, elo_col] = replacements
+
+    out['EloDiff'] = out['Team1_EloPregame'] - out['Team2_EloPregame']
+    out['EloWinProbTeam1'] = 1.0 / (
+        1.0 + 10.0 ** ((out['Team2_EloPregame'] - out['Team1_EloPregame']) / 400.0)
+    )
+    return out
+
+
 GenderPrefix = Literal["M", "W"] # Gender prefix for function definition
-def build_gender_pipeline(prefix: GenderPrefix) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def build_gender_pipeline(
+    prefix: GenderPrefix,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Pipeline to run everything above for men or women
     - loads the three raw CSV's for the three stages of data: RegularSeasonCompactResults, NCAATourneyCompactResults and NCAATourneySeeds.
     - Builds team features + seed table
@@ -293,28 +537,38 @@ def build_gender_pipeline(prefix: GenderPrefix) -> tuple[pd.DataFrame, pd.DataFr
         prefix (str): M for men W for women
 
     Returns:
-        tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]: team features, seed table, and train features
+        tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+            team features, seed table, regular end Elo table, season end Elo table, and train features
     """
     reg = pd.read_csv(RAW_DIR / f'{prefix}RegularSeasonCompactResults.csv')
     tour = pd.read_csv(RAW_DIR / f'{prefix}NCAATourneyCompactResults.csv')
     seeds = pd.read_csv(RAW_DIR / f'{prefix}NCAATourneySeeds.csv')
 
+    elo_games, regular_end_elo, season_end_elo = build_elo_tables(reg, tour)
+    tourney_elo = elo_games[elo_games['GameType'] == 'NCAA'].copy()
+
     team_feats = build_team_season_features(reg)
     seed_table = build_seed_table(seeds)
 
-    train_pairs = make_canonical_tourney_matchups(tour)
+    train_pairs = make_canonical_tourney_matchups(tour, tourney_elo=tourney_elo)
     train_feat = attach_pair_features(train_pairs, team_feats, seed_table, include_target=True)
+    train_feat = fill_missing_elo_from_carryover(train_feat, season_end_elo)
     validate_pair_table(train_feat, with_target=True, table_name=f'{prefix} train')
+    validate_elo_feature_table(train_feat, table_name=f'{prefix} train')
 
-    return team_feats, seed_table, train_feat
+    return team_feats, seed_table, regular_end_elo, season_end_elo, train_feat
 
 
 def build_inference_features(
     sample_sub: pd.DataFrame,
     men_team_feats: pd.DataFrame,
     men_seed_table: pd.DataFrame,
+    men_regular_end_elo: pd.DataFrame,
+    men_season_end_elo: pd.DataFrame,
     women_team_feats: pd.DataFrame,
     women_seed_table: pd.DataFrame,
+    women_regular_end_elo: pd.DataFrame,
+    women_season_end_elo: pd.DataFrame,
 ) -> pd.DataFrame:
     """Build the feature table for the matchups the competition wants us to predict (from sample submission.csv)
 
@@ -339,12 +593,27 @@ def build_inference_features(
     men_pairs = base.loc[men_mask].copy()
     women_pairs = base.loc[women_mask].copy()
 
-    men_feat = attach_pair_features(men_pairs, men_team_feats, men_seed_table, include_target=False)
-    women_feat = attach_pair_features(women_pairs, women_team_feats, women_seed_table, include_target=False)
+    men_feat = attach_pair_features(
+        men_pairs,
+        men_team_feats,
+        men_seed_table,
+        include_target=False,
+        elo_snapshot=men_regular_end_elo,
+    )
+    women_feat = attach_pair_features(
+        women_pairs,
+        women_team_feats,
+        women_seed_table,
+        include_target=False,
+        elo_snapshot=women_regular_end_elo,
+    )
+    men_feat = fill_missing_elo_from_carryover(men_feat, men_season_end_elo)
+    women_feat = fill_missing_elo_from_carryover(women_feat, women_season_end_elo)
 
     out = pd.concat([men_feat, women_feat], ignore_index=True)
     out = out.sort_values(['Season', 'Team1ID', 'Team2ID']).reset_index(drop=True)
     validate_pair_table(out, with_target=False, table_name='stage1 inference')
+    validate_elo_feature_table(out, table_name='stage1 inference')
 
     if len(out) != len(sample_sub):
         raise ValueError('stage1 inference: row count mismatch against sample submission')
@@ -355,17 +624,22 @@ def build_inference_features(
 def main() -> None:
     CLEAN_DIR.mkdir(parents=True, exist_ok=True)
     assert_seed_parser_examples()
+    assert_elo_examples()
 
-    men_team_feats, men_seed_table, men_train = build_gender_pipeline('M')
-    women_team_feats, women_seed_table, women_train = build_gender_pipeline('W')
+    men_team_feats, men_seed_table, men_regular_end_elo, men_season_end_elo, men_train = build_gender_pipeline('M')
+    women_team_feats, women_seed_table, women_regular_end_elo, women_season_end_elo, women_train = build_gender_pipeline('W')
 
     sample_sub = pd.read_csv(RAW_DIR / 'SampleSubmissionStage1.csv')
     inference = build_inference_features(
         sample_sub,
         men_team_feats,
         men_seed_table,
+        men_regular_end_elo,
+        men_season_end_elo,
         women_team_feats,
         women_seed_table,
+        women_regular_end_elo,
+        women_season_end_elo,
     )
 
     men_team_feats.to_csv(CLEAN_DIR / 'men_team_season_features_minimal.csv', index=False)
