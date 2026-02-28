@@ -18,31 +18,31 @@
       "reg_alpha": 1.422e-07,
       "reg_lambda": 0.0552546451
     },
-    "n_trials": 2
+    "n_trials": 1
   },
   "women": {
-    "brier_pooled": 0.14282101392745972,
+    "brier_pooled": 0.15078452229499817,
     "brier_by_year": {
-      "2022": 0.1682748794555664,
-      "2023": 0.17376281321048737,
-      "2024": 0.12449731677770615,
-      "2025": 0.10474899411201477
+      "2022": 0.1748427301645279,
+      "2023": 0.1776045262813568,
+      "2024": 0.13678820431232452,
+      "2025": 0.11390255391597748
     },
     "best_params": {
-      "n_estimators": 2250,
-      "learning_rate": 0.0056496583,
-      "max_depth": 26,
-      "min_child_weight": 1.397007247,
-      "subsample": 0.7687998299,
-      "colsample_bytree": 0.60163109,
-      "gamma": 1.9023027719,
-      "reg_alpha": 0.0006548688,
-      "reg_lambda": 27.6135294735
+      "n_estimators": 2773,
+      "learning_rate": 0.001312648,
+      "max_depth": 19,
+      "min_child_weight": 0.5383424221,
+      "subsample": 0.935685033,
+      "colsample_bytree": 0.834857219,
+      "gamma": 0.0346591911,
+      "reg_alpha": 6.02284e-05,
+      "reg_lambda": 30.831492768
     },
-    "n_trials": 2
+    "n_trials": 1
   },
   "overall": {
-    "brier_pooled": 0.1718379110097885
+    "brier_pooled": 0.17581965029239655
   },
   "years": [
     2022,

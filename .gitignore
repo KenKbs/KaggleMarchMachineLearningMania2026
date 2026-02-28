@@ -1,3 +1,4 @@
 data/raw/
 data/cleaned/
+!data/cleaned/xgb_stage1_trials.csv
 Scripts/__pycache__/
