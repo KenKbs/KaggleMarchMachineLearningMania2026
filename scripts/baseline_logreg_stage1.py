@@ -445,6 +445,8 @@ def predict_stage1_by_year(
 
 def add_id_column(df: pd.DataFrame) -> pd.DataFrame:
     """Add Kaggle submission `ID` column (`Season_Team1ID_Team2ID`).
+    # TODO Rework later - currently parse_submission_ids from build_minimal_features get's the raw id, but 
+    # attach_pair_features drops that ID and now we have to rebuild it. Maybe rewrite build_minimal_features to keep the ID column instead of parsing and dropping it?
 
     Args:
         df: DataFrame containing `Season`, `Team1ID`, and `Team2ID`.
@@ -481,10 +483,11 @@ def main() -> None:
     if args.n_iter <= 0:
         raise ValueError("--n-iter must be > 0")
 
-    men_train = pd.read_csv(args.men_train_path)
-    women_train = pd.read_csv(args.women_train_path)
-    stage1 = pd.read_csv(args.stage1_features_path)
+    men_train = pd.read_csv(args.men_train_path) # default=Path("data/cleaned/men_tourney_train_features_minimal.csv"),
+    women_train = pd.read_csv(args.women_train_path) # default=Path("data/cleaned/women_tourney_train_features_minimal.csv") --> The historical data we train on
+    stage1 = pd.read_csv(args.stage1_features_path) # default=Path("data/cleaned/stage1_inference_features_minimal.csv")  --> The stuff we want to predict on
 
+    # Validate schemas
     assert_required_columns(men_train, TRAIN_REQUIRED_COLS, "men_train")
     assert_required_columns(women_train, TRAIN_REQUIRED_COLS, "women_train")
     assert_required_columns(stage1, INFER_REQUIRED_COLS, "stage1_features")
@@ -502,11 +505,13 @@ def main() -> None:
         if stage1[stage1["Season"] == y].empty:
             raise ValueError(f"stage1_features: missing inference year={y}")
 
+    # Split inference rows by division using TeamID ranges (men / women)
     men_infer = stage1[stage1["Team1ID"] < 3000].copy()
     women_infer = stage1[stage1["Team1ID"] >= 3000].copy()
     if men_infer.empty or women_infer.empty:
         raise ValueError("stage1_features must include both men and women rows")
 
+    # Find best values for each division independently, then generate predictions for Stage1 inference rows
     men_best_params, men_oof, men_metrics = tune_division(
         train_df=men_train,
         years=years,
@@ -522,6 +527,7 @@ def main() -> None:
         division_name="women",
     )
 
+    # Generate predictions for Stage1 inference rows using the best hyperparameters found for each division
     men_pred = predict_stage1_by_year(
         train_df=men_train,
         infer_df=men_infer,
@@ -539,22 +545,26 @@ def main() -> None:
         division_name="women",
     )
 
+    # Combine
     oof_all = pd.concat([men_oof, women_oof], ignore_index=True).sort_values(
         ["Season", "Team1ID", "Team2ID"]
     )
 
+    # Reconstruct Kaggle submission ID and select output columns for predictions
     preds_all = pd.concat([men_pred, women_pred], ignore_index=True).sort_values(
         ["Season", "Team1ID", "Team2ID"]
     )
     preds_all = add_id_column(preds_all)
     preds_out = preds_all[["ID", "PredProb", "PredHard"]].copy()
 
+    # Validate final output row counts before writing
     expected_infer_rows = len(stage1)
     if len(preds_out) != expected_infer_rows:
         raise ValueError(
             f"Final predictions row mismatch. got={len(preds_out)} expected={expected_infer_rows}"
         )
 
+    # Write outputs
     args.output_oof_path.parent.mkdir(parents=True, exist_ok=True)
     args.output_preds_path.parent.mkdir(parents=True, exist_ok=True)
     args.output_metrics_path.parent.mkdir(parents=True, exist_ok=True)
@@ -570,6 +580,7 @@ def main() -> None:
     }
     args.output_metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
+    # Log summary
     print("Generated:")
     print(f" - {args.output_oof_path} rows={len(oof_all)}")
     print(f" - {args.output_preds_path} rows={len(preds_out)}")
