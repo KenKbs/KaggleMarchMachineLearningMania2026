@@ -11,6 +11,16 @@ ELO_BASE = 1500.0
 ELO_K = 20.0
 ELO_CARRYOVER = 0.75
 EXPORTED_ELO_DROP_COLS = ['EloDiff', 'EloWinProbTeam1']
+H2H_WINDOW_SEASONS = 3
+H2H_INCLUDE_CURRENT_SEASON_REGULAR = True
+H2H_INCLUDE_PRIOR_NCAA = True
+H2H_ZERO_MARGIN_IF_NO_WINS = 0.0
+H2H_FEATURE_COLS = [
+    'H2H_Team1_Wins_3y',
+    'H2H_Team2_Wins_3y',
+    'H2H_Team1_AvgWinMargin_3y',
+    'H2H_Team2_AvgWinMargin_3y',
+]
 
 
 def parse_seed_value(seed: str) -> int | float:
@@ -354,12 +364,146 @@ def parse_submission_ids(sub_df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def build_canonical_h2h_history(
+    reg_compact: pd.DataFrame,
+    tour_compact: pd.DataFrame,
+    include_prior_ncaa: bool,
+) -> pd.DataFrame:
+    """Create canonical head-to-head game history rows across regular and optional NCAA games."""
+    reg = reg_compact[
+        ['Season', 'WTeamID', 'LTeamID', 'WScore', 'LScore']
+    ].copy()
+    reg['Source'] = 'Regular'
+
+    frames = [reg]
+    if include_prior_ncaa:
+        tour = tour_compact[
+            ['Season', 'WTeamID', 'LTeamID', 'WScore', 'LScore']
+        ].copy()
+        tour['Source'] = 'NCAA'
+        frames.append(tour)
+
+    games = pd.concat(frames, ignore_index=True)
+    games['Team1ID'] = games[['WTeamID', 'LTeamID']].min(axis=1).astype(int)
+    games['Team2ID'] = games[['WTeamID', 'LTeamID']].max(axis=1).astype(int)
+    games['Team1Won'] = (games['WTeamID'] == games['Team1ID']).astype(int)
+    games['Team1Margin'] = np.where(
+        games['Team1Won'] == 1,
+        games['WScore'] - games['LScore'],
+        games['LScore'] - games['WScore'],
+    ).astype(float)
+    return games[
+        ['Season', 'Team1ID', 'Team2ID', 'Source', 'Team1Won', 'Team1Margin']
+    ].copy()
+
+
+def build_h2h_features(
+    pair_df: pd.DataFrame,
+    reg_compact: pd.DataFrame,
+    tour_compact: pd.DataFrame,
+    window_seasons: int = H2H_WINDOW_SEASONS,
+) -> pd.DataFrame:
+    """Build rolling head-to-head features for each matchup row."""
+    required = ['Season', 'Team1ID', 'Team2ID']
+    missing = [c for c in required if c not in pair_df.columns]
+    if missing:
+        raise ValueError(f'build_h2h_features: pair_df missing required columns: {missing}')
+
+    history = build_canonical_h2h_history(
+        reg_compact=reg_compact,
+        tour_compact=tour_compact,
+        include_prior_ncaa=H2H_INCLUDE_PRIOR_NCAA,
+    )
+    history['Team2Won'] = 1 - history['Team1Won']
+    history['Team1WinMargin'] = np.where(history['Team1Won'] == 1, history['Team1Margin'], 0.0)
+    history['Team2WinMargin'] = np.where(history['Team2Won'] == 1, -history['Team1Margin'], 0.0)
+
+    regular_year = (
+        history[history['Source'] == 'Regular']
+        .groupby(['Season', 'Team1ID', 'Team2ID'], as_index=False)
+        .agg(
+            Team1Wins=('Team1Won', 'sum'),
+            Team2Wins=('Team2Won', 'sum'),
+            Team1WinMarginSum=('Team1WinMargin', 'sum'),
+            Team2WinMarginSum=('Team2WinMargin', 'sum'),
+        )
+    )
+    ncaa_year = (
+        history[history['Source'] == 'NCAA']
+        .groupby(['Season', 'Team1ID', 'Team2ID'], as_index=False)
+        .agg(
+            Team1Wins=('Team1Won', 'sum'),
+            Team2Wins=('Team2Won', 'sum'),
+            Team1WinMarginSum=('Team1WinMargin', 'sum'),
+            Team2WinMarginSum=('Team2WinMargin', 'sum'),
+        )
+    )
+
+    rows: list[pd.DataFrame] = []
+    for season in sorted(pair_df['Season'].unique()):
+        season_pairs = pair_df[pair_df['Season'] == season][['Season', 'Team1ID', 'Team2ID']].copy()
+        hist_start = int(season) - window_seasons + 1
+
+        reg_hist = regular_year[
+            (regular_year['Season'] >= hist_start)
+            & (regular_year['Season'] <= int(season))
+        ][['Team1ID', 'Team2ID', 'Team1Wins', 'Team2Wins', 'Team1WinMarginSum', 'Team2WinMarginSum']]
+
+        hist_frames = [reg_hist]
+        if H2H_INCLUDE_PRIOR_NCAA and not ncaa_year.empty:
+            ncaa_hist = ncaa_year[
+                (ncaa_year['Season'] >= hist_start)
+                & (ncaa_year['Season'] <= int(season) - 1)
+            ][['Team1ID', 'Team2ID', 'Team1Wins', 'Team2Wins', 'Team1WinMarginSum', 'Team2WinMarginSum']]
+            hist_frames.append(ncaa_hist)
+
+        hist = pd.concat(hist_frames, ignore_index=True)
+        if hist.empty:
+            season_pairs['H2H_Team1_Wins_3y'] = 0
+            season_pairs['H2H_Team2_Wins_3y'] = 0
+            season_pairs['H2H_Team1_AvgWinMargin_3y'] = H2H_ZERO_MARGIN_IF_NO_WINS
+            season_pairs['H2H_Team2_AvgWinMargin_3y'] = H2H_ZERO_MARGIN_IF_NO_WINS
+            rows.append(season_pairs)
+            continue
+
+        hist = (
+            hist.groupby(['Team1ID', 'Team2ID'], as_index=False)
+            .agg(
+                Team1Wins=('Team1Wins', 'sum'),
+                Team2Wins=('Team2Wins', 'sum'),
+                Team1WinMarginSum=('Team1WinMarginSum', 'sum'),
+                Team2WinMarginSum=('Team2WinMarginSum', 'sum'),
+            )
+        )
+        merged = season_pairs.merge(hist, on=['Team1ID', 'Team2ID'], how='left')
+        for col in ['Team1Wins', 'Team2Wins', 'Team1WinMarginSum', 'Team2WinMarginSum']:
+            merged[col] = merged[col].fillna(0.0)
+
+        merged['H2H_Team1_Wins_3y'] = merged['Team1Wins'].astype(int)
+        merged['H2H_Team2_Wins_3y'] = merged['Team2Wins'].astype(int)
+        merged['H2H_Team1_AvgWinMargin_3y'] = np.where(
+            merged['Team1Wins'] > 0,
+            merged['Team1WinMarginSum'] / merged['Team1Wins'],
+            H2H_ZERO_MARGIN_IF_NO_WINS,
+        )
+        merged['H2H_Team2_AvgWinMargin_3y'] = np.where(
+            merged['Team2Wins'] > 0,
+            merged['Team2WinMarginSum'] / merged['Team2Wins'],
+            H2H_ZERO_MARGIN_IF_NO_WINS,
+        )
+        rows.append(merged[['Season', 'Team1ID', 'Team2ID', *H2H_FEATURE_COLS]])
+
+    out = pd.concat(rows, ignore_index=True)
+    return out[['Season', 'Team1ID', 'Team2ID', *H2H_FEATURE_COLS]].copy()
+
+
 def attach_pair_features(
     pair_df: pd.DataFrame,
     team_feats: pd.DataFrame,
     seeds: pd.DataFrame,
     include_target: bool,
     elo_snapshot: pd.DataFrame | None = None,
+    h2h_features: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Builds a feeature dataframe for training
 
@@ -405,6 +549,15 @@ def attach_pair_features(
         e2 = elo_snapshot.rename(columns={'TeamID': 'Team2ID', 'EloPregame': 'Team2_EloPregame'})
         merged = merged.merge(e1, on=['Season', 'Team1ID'], how='left')
         merged = merged.merge(e2, on=['Season', 'Team2ID'], how='left')
+    if h2h_features is not None:
+        merged = merged.merge(
+            h2h_features[['Season', 'Team1ID', 'Team2ID', *H2H_FEATURE_COLS]],
+            on=['Season', 'Team1ID', 'Team2ID'],
+            how='left',
+        )
+    else:
+        for col in H2H_FEATURE_COLS:
+            merged[col] = 0.0
 
     required_elo_cols = ['Team1_EloPregame', 'Team2_EloPregame']
     missing_elo_cols = [c for c in required_elo_cols if c not in merged.columns]
@@ -440,6 +593,7 @@ def attach_pair_features(
         'Last10PointMarginDiff',
         'Team1_EloPregame',
         'Team2_EloPregame',
+        *H2H_FEATURE_COLS,
     ]
     if include_target:
         cols.append('target')
@@ -465,6 +619,24 @@ def validate_pair_table(df: pd.DataFrame, with_target: bool, table_name: str) ->
 
     if with_target and not set(df['target'].unique()).issubset({0, 1}):
         raise ValueError(f'{table_name}: target contains values outside 0/1')
+
+    h2h_present = [c for c in H2H_FEATURE_COLS if c in df.columns]
+    if h2h_present:
+        missing_h2h = [c for c in H2H_FEATURE_COLS if c not in df.columns]
+        if missing_h2h:
+            raise ValueError(f'{table_name}: missing H2H columns: {missing_h2h}')
+        if df[H2H_FEATURE_COLS].isna().any().any():
+            missing_count = int(df[H2H_FEATURE_COLS].isna().sum().sum())
+            raise ValueError(f'{table_name}: H2H feature columns contain NaN values: {missing_count}')
+        win_cols = ['H2H_Team1_Wins_3y', 'H2H_Team2_Wins_3y']
+        if (df[win_cols] < 0).any().any():
+            raise ValueError(f'{table_name}: H2H win-count features contain negative values')
+        non_int_mask = (df[win_cols] % 1 != 0).any().any()
+        if non_int_mask:
+            raise ValueError(f'{table_name}: H2H win-count features must be integer-valued')
+        margin_cols = ['H2H_Team1_AvgWinMargin_3y', 'H2H_Team2_AvgWinMargin_3y']
+        if (df[margin_cols] < 0).any().any():
+            raise ValueError(f'{table_name}: H2H average win-margin features contain negative values')
 
 
 def validate_elo_feature_table(df: pd.DataFrame, table_name: str) -> None:
@@ -537,7 +709,19 @@ def build_gender_pipeline(
     seed_table = build_seed_table(seeds)
 
     train_pairs = make_canonical_tourney_matchups(tour, tourney_elo=tourney_elo)
-    train_feat = attach_pair_features(train_pairs, team_feats, seed_table, include_target=True)
+    train_h2h = build_h2h_features(
+        train_pairs,
+        reg_compact=reg,
+        tour_compact=tour,
+        window_seasons=H2H_WINDOW_SEASONS,
+    )
+    train_feat = attach_pair_features(
+        train_pairs,
+        team_feats,
+        seed_table,
+        include_target=True,
+        h2h_features=train_h2h,
+    )
     train_feat = fill_missing_elo_from_carryover(train_feat, season_end_elo)
     validate_pair_table(train_feat, with_target=True, table_name=f'{prefix} train')
     validate_elo_feature_table(train_feat, table_name=f'{prefix} train')
@@ -579,6 +763,22 @@ def build_inference_features(
 
     men_pairs = base.loc[men_mask].copy()
     women_pairs = base.loc[women_mask].copy()
+    men_reg = pd.read_csv(RAW_DIR / 'MRegularSeasonCompactResults.csv')
+    men_tour = pd.read_csv(RAW_DIR / 'MNCAATourneyCompactResults.csv')
+    women_reg = pd.read_csv(RAW_DIR / 'WRegularSeasonCompactResults.csv')
+    women_tour = pd.read_csv(RAW_DIR / 'WNCAATourneyCompactResults.csv')
+    men_h2h = build_h2h_features(
+        men_pairs,
+        reg_compact=men_reg,
+        tour_compact=men_tour,
+        window_seasons=H2H_WINDOW_SEASONS,
+    )
+    women_h2h = build_h2h_features(
+        women_pairs,
+        reg_compact=women_reg,
+        tour_compact=women_tour,
+        window_seasons=H2H_WINDOW_SEASONS,
+    )
 
     men_feat = attach_pair_features(
         men_pairs,
@@ -586,6 +786,7 @@ def build_inference_features(
         men_seed_table,
         include_target=False,
         elo_snapshot=men_regular_end_elo,
+        h2h_features=men_h2h,
     )
     women_feat = attach_pair_features(
         women_pairs,
@@ -593,6 +794,7 @@ def build_inference_features(
         women_seed_table,
         include_target=False,
         elo_snapshot=women_regular_end_elo,
+        h2h_features=women_h2h,
     )
     men_feat = fill_missing_elo_from_carryover(men_feat, men_season_end_elo)
     women_feat = fill_missing_elo_from_carryover(women_feat, women_season_end_elo)
