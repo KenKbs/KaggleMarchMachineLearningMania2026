@@ -10,6 +10,7 @@ CLEAN_DIR = Path('data/cleaned')
 ELO_BASE = 1500.0
 ELO_K = 20.0
 ELO_CARRYOVER = 0.75
+EXPORTED_ELO_DROP_COLS = ['Team1_EloPregame', 'Team2_EloPregame', 'EloWinProbTeam1']
 
 
 def parse_seed_value(seed: str) -> int | float:
@@ -555,6 +556,7 @@ def build_gender_pipeline(
     train_feat = fill_missing_elo_from_carryover(train_feat, season_end_elo)
     validate_pair_table(train_feat, with_target=True, table_name=f'{prefix} train')
     validate_elo_feature_table(train_feat, table_name=f'{prefix} train')
+    train_feat = train_feat.drop(columns=EXPORTED_ELO_DROP_COLS, errors='ignore')
 
     return team_feats, seed_table, regular_end_elo, season_end_elo, train_feat
 
@@ -614,6 +616,7 @@ def build_inference_features(
     out = out.sort_values(['Season', 'Team1ID', 'Team2ID']).reset_index(drop=True)
     validate_pair_table(out, with_target=False, table_name='stage1 inference')
     validate_elo_feature_table(out, table_name='stage1 inference')
+    out = out.drop(columns=EXPORTED_ELO_DROP_COLS, errors='ignore')
 
     if len(out) != len(sample_sub):
         raise ValueError('stage1 inference: row count mismatch against sample submission')
