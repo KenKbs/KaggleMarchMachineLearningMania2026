@@ -10,7 +10,7 @@ CLEAN_DIR = Path('data/cleaned')
 ELO_BASE = 1500.0
 ELO_K = 20.0
 ELO_CARRYOVER = 0.75
-EXPORTED_ELO_DROP_COLS = ['Team1_EloPregame', 'Team2_EloPregame', 'EloWinProbTeam1']
+EXPORTED_ELO_DROP_COLS = ['EloDiff', 'EloWinProbTeam1']
 
 
 def parse_seed_value(seed: str) -> int | float:
@@ -428,11 +428,6 @@ def attach_pair_features(
     merged['Last10PointMarginDiff'] = (
         merged['Team1_Last10_PointMargin'] - merged['Team2_Last10_PointMargin']
     )
-    merged['EloDiff'] = merged['Team1_EloPregame'] - merged['Team2_EloPregame']
-    merged['EloWinProbTeam1'] = 1.0 / (
-        1.0 + 10.0 ** ((merged['Team2_EloPregame'] - merged['Team1_EloPregame']) / 400.0)
-    )
-
     cols = [
         'Season',
         'Team1ID',
@@ -445,8 +440,6 @@ def attach_pair_features(
         'Last10PointMarginDiff',
         'Team1_EloPregame',
         'Team2_EloPregame',
-        'EloDiff',
-        'EloWinProbTeam1',
     ]
     if include_target:
         cols.append('target')
@@ -476,7 +469,7 @@ def validate_pair_table(df: pd.DataFrame, with_target: bool, table_name: str) ->
 
 def validate_elo_feature_table(df: pd.DataFrame, table_name: str) -> None:
     """Validate Elo feature columns are present and well-formed."""
-    required = ['Team1_EloPregame', 'Team2_EloPregame', 'EloDiff', 'EloWinProbTeam1']
+    required = ['Team1_EloPregame', 'Team2_EloPregame']
     missing_cols = [c for c in required if c not in df.columns]
     if missing_cols:
         raise ValueError(f'{table_name}: missing Elo feature columns: {missing_cols}')
@@ -484,10 +477,6 @@ def validate_elo_feature_table(df: pd.DataFrame, table_name: str) -> None:
     if df[required].isna().any().any():
         missing_count = int(df[required].isna().sum().sum())
         raise ValueError(f'{table_name}: Elo feature columns contain NaN values: {missing_count}')
-
-    if ((df['EloWinProbTeam1'] < 0) | (df['EloWinProbTeam1'] > 1)).any():
-        raise ValueError(f'{table_name}: EloWinProbTeam1 values outside [0,1]')
-
 
 def fill_missing_elo_from_carryover(
     pair_feats: pd.DataFrame,
@@ -514,10 +503,6 @@ def fill_missing_elo_from_carryover(
             ]
             out.loc[miss_mask, elo_col] = replacements
 
-    out['EloDiff'] = out['Team1_EloPregame'] - out['Team2_EloPregame']
-    out['EloWinProbTeam1'] = 1.0 / (
-        1.0 + 10.0 ** ((out['Team2_EloPregame'] - out['Team1_EloPregame']) / 400.0)
-    )
     return out
 
 
