@@ -10,7 +10,7 @@ CLEAN_DIR = Path('data/cleaned')
 ELO_BASE = 1500.0
 ELO_K = 20.0
 ELO_CARRYOVER = 0.75
-EXPORTED_ELO_DROP_COLS = ['EloDiff', 'EloWinProbTeam1']
+EXPORTED_ELO_DROP_COLS = ['Team1_EloPregame', 'Team2_EloPregame', 'EloWinProbTeam1']
 H2H_WINDOW_SEASONS = 3
 H2H_INCLUDE_CURRENT_SEASON_REGULAR = True
 H2H_INCLUDE_PRIOR_NCAA = True
@@ -803,6 +803,7 @@ def attach_pair_features(
             'attach_pair_features: missing Elo columns. '
             'Provide `elo_snapshot` or pass pair_df with Team1_EloPregame/Team2_EloPregame.'
         )
+    merged['EloDiff'] = merged['Team1_EloPregame'] - merged['Team2_EloPregame']
 
     merged['SeedDiff'] = merged['Team1_SeedNum'] - merged['Team2_SeedNum']
     merged['seed_missing_any'] = (
@@ -875,6 +876,7 @@ def attach_pair_features(
         'Last10PointMarginDiff',
         'Team1_EloPregame',
         'Team2_EloPregame',
+        'EloDiff',
         *ADVANCED_DIFF_FEATURE_COLS,
         *H2H_FEATURE_COLS,
     ]
@@ -935,7 +937,7 @@ def validate_pair_table(df: pd.DataFrame, with_target: bool, table_name: str) ->
 
 def validate_elo_feature_table(df: pd.DataFrame, table_name: str) -> None:
     """Validate Elo feature columns are present and well-formed."""
-    required = ['Team1_EloPregame', 'Team2_EloPregame']
+    required = ['EloDiff']
     missing_cols = [c for c in required if c not in df.columns]
     if missing_cols:
         raise ValueError(f'{table_name}: missing Elo feature columns: {missing_cols}')
@@ -943,6 +945,8 @@ def validate_elo_feature_table(df: pd.DataFrame, table_name: str) -> None:
     if df[required].isna().any().any():
         missing_count = int(df[required].isna().sum().sum())
         raise ValueError(f'{table_name}: Elo feature columns contain NaN values: {missing_count}')
+    if not np.isfinite(df['EloDiff']).all():
+        raise ValueError(f'{table_name}: EloDiff contains non-finite values')
 
 def fill_missing_elo_from_carryover(
     pair_feats: pd.DataFrame,
@@ -968,6 +972,7 @@ def fill_missing_elo_from_carryover(
                 for season, team_id in zip(out.loc[miss_mask, 'Season'], out.loc[miss_mask, team_col])
             ]
             out.loc[miss_mask, elo_col] = replacements
+    out['EloDiff'] = out['Team1_EloPregame'] - out['Team2_EloPregame']
 
     return out
 
